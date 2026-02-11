@@ -1,0 +1,341 @@
+import { spawn } from 'child_process';
+import { SVNError, TimeoutError } from '../errors/index.js';
+import type { CommandResult, BaseSVNOptions, Revision, TortoiseSVNOptions } from '../types/index.js';
+
+/**
+ * Default timeout for SVN operations (5 minutes)
+ */
+const DEFAULT_TIMEOUT = 300000;
+
+/**
+ * Builds revision argument string
+ */
+export function buildRevisionArg(revision: Revision): string {
+  switch (revision.type) {
+    case 'number':
+      return String(revision.value);
+    case 'head':
+      return 'HEAD';
+    case 'base':
+      return 'BASE';
+    case 'committed':
+      return 'COMMITTED';
+    case 'prev':
+      return 'PREV';
+    case 'date':
+      return `{${revision.value}}`;
+    default:
+      return 'HEAD';
+  }
+}
+
+/**
+ * Builds common SVN command arguments
+ */
+export function buildCommonArgs(options: BaseSVNOptions): string[] {
+  const args: string[] = [];
+
+  if (options.username) {
+    args.push('--username', options.username);
+  }
+  if (options.password) {
+    args.push('--password', options.password);
+  }
+  if (options.noAuthCache) {
+    args.push('--no-auth-cache');
+  }
+  if (options.nonInteractive) {
+    args.push('--non-interactive');
+  }
+  if (options.trustServerCert) {
+    args.push('--trust-server-cert');
+  }
+  if (options.configDir) {
+    args.push('--config-dir', options.configDir);
+  }
+
+  return args;
+}
+
+/**
+ * Builds TortoiseSVN GUI options
+ */
+export function buildTortoiseOptions(options: TortoiseSVNOptions): string[] {
+  const args: string[] = [];
+
+  if (options.closeOnEnd !== undefined) {
+    args.push(`/closeonend:${options.closeOnEnd}`);
+  }
+  if (options.closeForLocal) {
+    args.push('/closeforlocal');
+  }
+  if (options.closeForRemote) {
+    args.push('/closeforremote');
+  }
+  if (options.noMerge) {
+    args.push('/nomerge');
+  }
+  if (options.noCommit) {
+    args.push('/nocommit');
+  }
+  if (options.noLock) {
+    args.push('/nolock');
+  }
+  if (options.noUniDiff) {
+    args.push('/nounidiff');
+  }
+
+  return args;
+}
+
+/**
+ * Normalizes paths for Windows
+ */
+export function normalizePath(path: string): string {
+  // Convert forward slashes to backslashes for Windows
+  return path.replace(/\//g, '\\');
+}
+
+/**
+ * Converts path or array of paths to array
+ */
+export function toPathArray(paths: string | string[]): string[] {
+  return Array.isArray(paths) ? paths : [paths];
+}
+
+/**
+ * Escapes arguments for shell execution
+ */
+export function escapeArg(arg: string): string {
+  // If argument contains spaces, wrap in quotes
+  if (arg.includes(' ')) {
+    return `"${arg.replace(/"/g, '\\"')}"`;
+  }
+  return arg;
+}
+
+/**
+ * Executes a command and returns the result
+ */
+export async function executeCommand(
+  command: string,
+  args: string[],
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const process = spawn(command, args, {
+      shell: true,
+      windowsVerbatimArguments: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    // Set timeout
+    if (timeout > 0) {
+      timeoutId = setTimeout(() => {
+        process.kill('SIGTERM');
+        reject(new TimeoutError(`Command timed out after ${timeout}ms`));
+      }, timeout);
+    }
+
+    process.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    process.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    process.on('close', (code: number | null) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      if (code === 0) {
+        resolve({
+          success: true,
+          stdout,
+          stderr,
+          exitCode: 0,
+        });
+      } else {
+        reject(new SVNError(
+          `Command failed with exit code ${code}`,
+          code || 1,
+          stderr,
+          stdout
+        ));
+      }
+    });
+
+    process.on('error', (error: Error) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      reject(new SVNError(`Failed to execute command: ${error.message}`, 1));
+    });
+  });
+}
+
+/**
+ * Executes TortoiseProc with given command and parameters
+ */
+export async function executeTortoiseProc(
+  command: string,
+  parameters: Record<string, string>,
+  tortoiseOptions: TortoiseSVNOptions = {},
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<CommandResult> {
+  const args: string[] = ['/command:' + command];
+
+  // Add parameters
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value) {
+      args.push(`/${key}:${escapeArg(value)}`);
+    }
+  }
+
+  // Add TortoiseSVN options
+  args.push(...buildTortoiseOptions(tortoiseOptions));
+
+  return executeCommand('TortoiseProc.exe', args, timeout);
+}
+
+/**
+ * Executes svn.exe with given arguments
+ */
+export async function executeSVN(
+  subcommand: string,
+  args: string[],
+  options: BaseSVNOptions = {},
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<CommandResult> {
+  const allArgs = [subcommand, ...buildCommonArgs(options), ...args];
+  return executeCommand('svn.exe', allArgs, timeout);
+}
+
+/**
+ * Parses XML output from SVN commands
+ */
+export function parseSVNXml(xml: string): Record<string, unknown> {
+  // Simple XML to object parser for SVN output
+  const result: Record<string, unknown> = {};
+  
+  // Extract entry elements
+  const entryRegex = /<entry([^>]*)>([\s\S]*?)<\/entry>/g;
+  let match;
+  
+  while ((match = entryRegex.exec(xml)) !== null) {
+    const attrs = match[1];
+    const content = match[2];
+    
+    // Extract path from attributes
+    const pathMatch = /path="([^"]*)"/.exec(attrs);
+    if (pathMatch) {
+      const path = pathMatch[1];
+      const entryData: Record<string, unknown> = { path };
+      
+      // Parse child elements
+      const childRegex = /<([^>]+)>([^<]*)<\/\1>/g;
+      let childMatch;
+      while ((childMatch = childRegex.exec(content)) !== null) {
+        entryData[childMatch[1]] = childMatch[2];
+      }
+      
+      if (!result.entries) {
+        result.entries = [];
+      }
+      (result.entries as Record<string, unknown>[]).push(entryData);
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Parses SVN status output
+ */
+export function parseStatusOutput(output: string): Array<{
+  status: string;
+  props: string;
+  locked: string;
+  history: string;
+  switched: string;
+  lockToken: string;
+  path: string;
+}> {
+  const lines = output.trim().split('\n');
+  const results = [];
+
+  for (const line of lines) {
+    if (line.length < 8) continue;
+    
+    // SVN status format: XXXXXXXXX path
+    // Columns: status, props, locked, history, switched, lock token
+    const status = line.charAt(0);
+    const props = line.charAt(1);
+    const locked = line.charAt(2);
+    const history = line.charAt(3);
+    const switched = line.charAt(4);
+    const lockToken = line.charAt(5);
+    const path = line.substring(7).trim();
+
+    results.push({
+      status,
+      props,
+      locked,
+      history,
+      switched,
+      lockToken,
+      path,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Parses SVN info output
+ */
+export function parseInfoOutput(output: string): Record<string, string> {
+  const lines = output.trim().split('\n');
+  const info: Record<string, string> = {};
+
+  for (const line of lines) {
+    const colonIndex = line.indexOf(':');
+    if (colonIndex > 0) {
+      const key = line.substring(0, colonIndex).trim();
+      const value = line.substring(colonIndex + 1).trim();
+      info[key] = value;
+    }
+  }
+
+  return info;
+}
+
+/**
+ * Validates that a path exists and is accessible
+ */
+export function validatePath(path: string): void {
+  if (!path || typeof path !== 'string') {
+    throw new Error('Path must be a non-empty string');
+  }
+}
+
+/**
+ * Validates that a URL is valid
+ */
+export function validateUrl(url: string): void {
+  if (!url || typeof url !== 'string') {
+    throw new Error('URL must be a non-empty string');
+  }
+  
+  const validProtocols = ['http://', 'https://', 'svn://', 'svn+ssh://', 'file://'];
+  const hasValidProtocol = validProtocols.some(protocol => url.startsWith(protocol));
+  
+  if (!hasValidProtocol) {
+    throw new Error(`URL must start with one of: ${validProtocols.join(', ')}`);
+  }
+}
