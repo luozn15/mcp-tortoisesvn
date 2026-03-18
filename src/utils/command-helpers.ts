@@ -43,30 +43,77 @@ function getIsWSL(): boolean {
 
 /**
  * Get the platform-specific SVN command
- * - Windows: svn.exe
- * - WSL: svn (use Linux native, fallback to svn.exe if needed)
- * - Other Linux/macOS: svn
  */
 function getSVNCommand(): string {
   if (process.platform === "win32") {
     return "svn.exe";
   }
-  // On WSL, prefer Linux native svn over Windows svn.exe
-  // (svn.exe from TortoiseSVN may not be in PATH)
   return "svn";
 }
 
 /**
  * Get the platform-specific TortoiseProc command
- * - Windows: TortoiseProc.exe
- * - WSL: TortoiseProc.exe (can call Windows executables)
- * - Other Linux/macOS: null (not available)
  */
 function getTortoiseProcCommand(): string | null {
   if (process.platform === "win32" || getIsWSL()) {
     return "TortoiseProc.exe";
   }
   return null;
+}
+
+/**
+ * Convert WSL path to Windows path
+ * /mnt/d/path -> D:\path
+ * /mnt/c/Users/... -> C:\Users\...
+ */
+export function wslPathToWindows(path: string): string {
+  if (!getIsWSL()) return path;
+
+  // Match /mnt/X/ pattern where X is a drive letter
+  const wslMountPattern = /^\/mnt\/([a-zA-Z])\/(.*)$/;
+  const match = path.match(wslMountPattern);
+
+  if (match) {
+    const driveLetter = match[1].toUpperCase();
+    const restPath = match[2];
+    // Convert forward slashes to backslashes
+    const windowsPath = restPath.replace(/\//g, "\\");
+    return `${driveLetter}:\\${windowsPath}`;
+  }
+
+  // If it's a WSL path but not under /mnt/, it's inside WSL filesystem
+  // TortoiseProc can't access these, but we return as-is and let it fail with clear error
+  return path;
+}
+
+/**
+ * Check if a value looks like a file path
+ */
+function isPathLike(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  // Starts with / or \ or drive letter pattern
+  return (
+    value.startsWith("/") || value.startsWith("\\") || /^[a-zA-Z]:/.test(value)
+  );
+}
+
+/**
+ * Convert all path-like values in a record from WSL to Windows format
+ */
+function convertPathsToWindows(
+  params: Record<string, string>,
+): Record<string, string> {
+  const converted: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(params)) {
+    if (isPathLike(value)) {
+      converted[key] = wslPathToWindows(value);
+    } else {
+      converted[key] = value;
+    }
+  }
+
+  return converted;
 }
 
 /**
@@ -169,11 +216,31 @@ export function toPathArray(paths: string | string[]): string[] {
  * Escapes arguments for shell execution
  */
 export function escapeArg(arg: string): string {
-  // If argument contains spaces, wrap in quotes
   if (arg.includes(" ")) {
     return `"${arg.replace(/"/g, '\\"')}"`;
   }
   return arg;
+}
+
+const PATH_PARAM_NAMES = new Set([
+  "path",
+  "path2",
+  "savepath",
+  "droptarget",
+  "outfile",
+  "logmsgfile",
+  "url",
+  "fromurl",
+  "tourl",
+  "output",
+  "configdir",
+  "projectpropertiespath",
+]);
+
+function escapePathArg(path: string): string {
+  let cleanPath = path.replace(/^"|"$/g, "");
+  cleanPath = cleanPath.replace(/"/g, '\\"');
+  return `"${cleanPath}"`;
 }
 
 /**
@@ -260,16 +327,19 @@ export async function executeTortoiseProc(
     );
   }
 
+  const convertedParams = convertPathsToWindows(parameters);
+
   const args: string[] = ["/command:" + command];
 
-  // Add parameters
-  for (const [key, value] of Object.entries(parameters)) {
+  for (const [key, value] of Object.entries(convertedParams)) {
     if (value) {
-      args.push(`/${key}:${escapeArg(value)}`);
+      const escapedValue = PATH_PARAM_NAMES.has(key.toLowerCase())
+        ? escapePathArg(value)
+        : escapeArg(value);
+      args.push(`/${key}:${escapedValue}`);
     }
   }
 
-  // Add TortoiseSVN options
   args.push(...buildTortoiseOptions(tortoiseOptions));
 
   return executeCommand(tortoiseCmd, args, timeout);
