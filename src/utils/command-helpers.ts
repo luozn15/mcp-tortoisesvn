@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import process from "process";
+import { readFileSync } from "fs";
 import { SVNError, TimeoutError } from "../errors/index.js";
 import type {
   CommandResult,
@@ -14,18 +15,58 @@ import type {
 const DEFAULT_TIMEOUT = 300000;
 
 /**
+ * Check if running in WSL (Windows Subsystem for Linux)
+ */
+function isWSL(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    const version = readFileSync("/proc/version", "utf8");
+    return (
+      version.toLowerCase().includes("microsoft") || version.includes("WSL")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cache WSL detection result
+ */
+let _isWSL: boolean | undefined;
+
+function getIsWSL(): boolean {
+  if (_isWSL === undefined) {
+    _isWSL = isWSL();
+  }
+  return _isWSL;
+}
+
+/**
  * Get the platform-specific SVN command
+ * - Windows: svn.exe
+ * - WSL: svn (use Linux native, fallback to svn.exe if needed)
+ * - Other Linux/macOS: svn
  */
 function getSVNCommand(): string {
-  return process.platform === "win32" ? "svn.exe" : "svn";
+  if (process.platform === "win32") {
+    return "svn.exe";
+  }
+  // On WSL, prefer Linux native svn over Windows svn.exe
+  // (svn.exe from TortoiseSVN may not be in PATH)
+  return "svn";
 }
 
 /**
  * Get the platform-specific TortoiseProc command
- * Note: TortoiseProc is Windows-only, returns null on other platforms
+ * - Windows: TortoiseProc.exe
+ * - WSL: TortoiseProc.exe (can call Windows executables)
+ * - Other Linux/macOS: null (not available)
  */
 function getTortoiseProcCommand(): string | null {
-  return process.platform === "win32" ? "TortoiseProc.exe" : null;
+  if (process.platform === "win32" || getIsWSL()) {
+    return "TortoiseProc.exe";
+  }
+  return null;
 }
 
 /**
