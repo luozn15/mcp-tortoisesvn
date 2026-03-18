@@ -1,7 +1,9 @@
 import { spawn } from "child_process";
 import process from "process";
-import { readFileSync } from "fs";
+import { readFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
+import { join } from "path";
 import { SVNError, TimeoutError } from "../errors/index.js";
+import { getLogger } from "./logger.js";
 import type {
   CommandResult,
   BaseSVNOptions,
@@ -9,10 +11,29 @@ import type {
   TortoiseSVNOptions,
 } from "../types/index.js";
 
-/**
- * Default timeout for SVN operations (5 minutes)
- */
 const DEFAULT_TIMEOUT = 300000;
+
+function getLogFilePath(): string {
+  const logDir = process.env.TSVN_MCP_LOG_DIR || join(process.cwd(), "logs");
+  if (!existsSync(logDir)) {
+    mkdirSync(logDir, { recursive: true });
+  }
+  return join(logDir, "command.log");
+}
+
+function logCommand(tool: string, input: unknown, command: string): void {
+  const timestamp = new Date().toISOString();
+  const logEntry = `[${timestamp}] ${tool}\n  Input: ${JSON.stringify(input, null, 2).replace(/\n/g, "\n  ")}\n  Command: ${command}\n\n`;
+
+  getLogger().info(`[${tool}] Executing: ${command}`);
+
+  try {
+    const logFile = getLogFilePath();
+    appendFileSync(logFile, logEntry, "utf8");
+  } catch (err) {
+    getLogger().error(`Failed to write log: ${err}`);
+  }
+}
 
 /**
  * Check if running in WSL (Windows Subsystem for Linux)
@@ -342,6 +363,13 @@ export async function executeTortoiseProc(
 
   args.push(...buildTortoiseOptions(tortoiseOptions));
 
+  const fullCommand = `${tortoiseCmd} ${args.join(" ")}`;
+  logCommand(
+    `tortoise_${command}`,
+    { parameters, tortoiseOptions },
+    fullCommand,
+  );
+
   return executeCommand(tortoiseCmd, args, timeout);
 }
 
@@ -354,8 +382,11 @@ export async function executeSVN(
   options: BaseSVNOptions = {},
   timeout: number = DEFAULT_TIMEOUT,
 ): Promise<CommandResult> {
+  const svnCmd = getSVNCommand();
   const allArgs = [subcommand, ...buildCommonArgs(options), ...args];
-  return executeCommand(getSVNCommand(), allArgs, timeout);
+  const fullCommand = `${svnCmd} ${allArgs.join(" ")}`;
+  logCommand(`svn_${subcommand}`, { args, options }, fullCommand);
+  return executeCommand(svnCmd, allArgs, timeout);
 }
 
 /**
