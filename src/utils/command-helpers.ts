@@ -1,6 +1,12 @@
-import { spawn } from 'child_process';
-import { SVNError, TimeoutError } from '../errors/index.js';
-import type { CommandResult, BaseSVNOptions, Revision, TortoiseSVNOptions } from '../types/index.js';
+import { spawn } from "child_process";
+import process from "process";
+import { SVNError, TimeoutError } from "../errors/index.js";
+import type {
+  CommandResult,
+  BaseSVNOptions,
+  Revision,
+  TortoiseSVNOptions,
+} from "../types/index.js";
 
 /**
  * Default timeout for SVN operations (5 minutes)
@@ -8,24 +14,39 @@ import type { CommandResult, BaseSVNOptions, Revision, TortoiseSVNOptions } from
 const DEFAULT_TIMEOUT = 300000;
 
 /**
+ * Get the platform-specific SVN command
+ */
+function getSVNCommand(): string {
+  return process.platform === "win32" ? "svn.exe" : "svn";
+}
+
+/**
+ * Get the platform-specific TortoiseProc command
+ * Note: TortoiseProc is Windows-only, returns null on other platforms
+ */
+function getTortoiseProcCommand(): string | null {
+  return process.platform === "win32" ? "TortoiseProc.exe" : null;
+}
+
+/**
  * Builds revision argument string
  */
 export function buildRevisionArg(revision: Revision): string {
   switch (revision.type) {
-    case 'number':
+    case "number":
       return String(revision.value);
-    case 'head':
-      return 'HEAD';
-    case 'base':
-      return 'BASE';
-    case 'committed':
-      return 'COMMITTED';
-    case 'prev':
-      return 'PREV';
-    case 'date':
+    case "head":
+      return "HEAD";
+    case "base":
+      return "BASE";
+    case "committed":
+      return "COMMITTED";
+    case "prev":
+      return "PREV";
+    case "date":
       return `{${revision.value}}`;
     default:
-      return 'HEAD';
+      return "HEAD";
   }
 }
 
@@ -36,22 +57,22 @@ export function buildCommonArgs(options: BaseSVNOptions): string[] {
   const args: string[] = [];
 
   if (options.username) {
-    args.push('--username', options.username);
+    args.push("--username", options.username);
   }
   if (options.password) {
-    args.push('--password', options.password);
+    args.push("--password", options.password);
   }
   if (options.noAuthCache) {
-    args.push('--no-auth-cache');
+    args.push("--no-auth-cache");
   }
   if (options.nonInteractive) {
-    args.push('--non-interactive');
+    args.push("--non-interactive");
   }
   if (options.trustServerCert) {
-    args.push('--trust-server-cert');
+    args.push("--trust-server-cert");
   }
   if (options.configDir) {
-    args.push('--config-dir', options.configDir);
+    args.push("--config-dir", options.configDir);
   }
 
   return args;
@@ -67,22 +88,22 @@ export function buildTortoiseOptions(options: TortoiseSVNOptions): string[] {
     args.push(`/closeonend:${options.closeOnEnd}`);
   }
   if (options.closeForLocal) {
-    args.push('/closeforlocal');
+    args.push("/closeforlocal");
   }
   if (options.closeForRemote) {
-    args.push('/closeforremote');
+    args.push("/closeforremote");
   }
   if (options.noMerge) {
-    args.push('/nomerge');
+    args.push("/nomerge");
   }
   if (options.noCommit) {
-    args.push('/nocommit');
+    args.push("/nocommit");
   }
   if (options.noLock) {
-    args.push('/nolock');
+    args.push("/nolock");
   }
   if (options.noUniDiff) {
-    args.push('/nounidiff');
+    args.push("/nounidiff");
   }
 
   return args;
@@ -93,7 +114,7 @@ export function buildTortoiseOptions(options: TortoiseSVNOptions): string[] {
  */
 export function normalizePath(path: string): string {
   // Convert forward slashes to backslashes for Windows
-  return path.replace(/\//g, '\\');
+  return path.replace(/\//g, "\\");
 }
 
 /**
@@ -108,7 +129,7 @@ export function toPathArray(paths: string | string[]): string[] {
  */
 export function escapeArg(arg: string): string {
   // If argument contains spaces, wrap in quotes
-  if (arg.includes(' ')) {
+  if (arg.includes(" ")) {
     return `"${arg.replace(/"/g, '\\"')}"`;
   }
   return arg;
@@ -120,7 +141,7 @@ export function escapeArg(arg: string): string {
 export async function executeCommand(
   command: string,
   args: string[],
-  timeout: number = DEFAULT_TIMEOUT
+  timeout: number = DEFAULT_TIMEOUT,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const process = spawn(command, args, {
@@ -128,27 +149,27 @@ export async function executeCommand(
       windowsVerbatimArguments: true,
     });
 
-    let stdout = '';
-    let stderr = '';
+    let stdout = "";
+    let stderr = "";
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     // Set timeout
     if (timeout > 0) {
       timeoutId = setTimeout(() => {
-        process.kill('SIGTERM');
+        process.kill("SIGTERM");
         reject(new TimeoutError(`Command timed out after ${timeout}ms`));
       }, timeout);
     }
 
-    process.stdout?.on('data', (data: Buffer) => {
+    process.stdout?.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
 
-    process.stderr?.on('data', (data: Buffer) => {
+    process.stderr?.on("data", (data: Buffer) => {
       stderr += data.toString();
     });
 
-    process.on('close', (code: number | null) => {
+    process.on("close", (code: number | null) => {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
@@ -161,16 +182,18 @@ export async function executeCommand(
           exitCode: 0,
         });
       } else {
-        reject(new SVNError(
-          `Command failed with exit code ${code}`,
-          code || 1,
-          stderr,
-          stdout
-        ));
+        reject(
+          new SVNError(
+            `Command failed with exit code ${code}`,
+            code || 1,
+            stderr,
+            stdout,
+          ),
+        );
       }
     });
 
-    process.on('error', (error: Error) => {
+    process.on("error", (error: Error) => {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
@@ -186,9 +209,17 @@ export async function executeTortoiseProc(
   command: string,
   parameters: Record<string, string>,
   tortoiseOptions: TortoiseSVNOptions = {},
-  timeout: number = DEFAULT_TIMEOUT
+  timeout: number = DEFAULT_TIMEOUT,
 ): Promise<CommandResult> {
-  const args: string[] = ['/command:' + command];
+  const tortoiseCmd = getTortoiseProcCommand();
+  if (!tortoiseCmd) {
+    throw new SVNError(
+      "TortoiseProc is only available on Windows. Use svn_* tools for command-line operations on other platforms.",
+      1,
+    );
+  }
+
+  const args: string[] = ["/command:" + command];
 
   // Add parameters
   for (const [key, value] of Object.entries(parameters)) {
@@ -200,20 +231,20 @@ export async function executeTortoiseProc(
   // Add TortoiseSVN options
   args.push(...buildTortoiseOptions(tortoiseOptions));
 
-  return executeCommand('TortoiseProc.exe', args, timeout);
+  return executeCommand(tortoiseCmd, args, timeout);
 }
 
 /**
- * Executes svn.exe with given arguments
+ * Executes svn with given arguments
  */
 export async function executeSVN(
   subcommand: string,
   args: string[],
   options: BaseSVNOptions = {},
-  timeout: number = DEFAULT_TIMEOUT
+  timeout: number = DEFAULT_TIMEOUT,
 ): Promise<CommandResult> {
   const allArgs = [subcommand, ...buildCommonArgs(options), ...args];
-  return executeCommand('svn.exe', allArgs, timeout);
+  return executeCommand(getSVNCommand(), allArgs, timeout);
 }
 
 /**
@@ -222,35 +253,35 @@ export async function executeSVN(
 export function parseSVNXml(xml: string): Record<string, unknown> {
   // Simple XML to object parser for SVN output
   const result: Record<string, unknown> = {};
-  
+
   // Extract entry elements
   const entryRegex = /<entry([^>]*)>([\s\S]*?)<\/entry>/g;
   let match;
-  
+
   while ((match = entryRegex.exec(xml)) !== null) {
     const attrs = match[1];
     const content = match[2];
-    
+
     // Extract path from attributes
     const pathMatch = /path="([^"]*)"/.exec(attrs);
     if (pathMatch) {
       const path = pathMatch[1];
       const entryData: Record<string, unknown> = { path };
-      
+
       // Parse child elements
       const childRegex = /<([^>]+)>([^<]*)<\/\1>/g;
       let childMatch;
       while ((childMatch = childRegex.exec(content)) !== null) {
         entryData[childMatch[1]] = childMatch[2];
       }
-      
+
       if (!result.entries) {
         result.entries = [];
       }
       (result.entries as Record<string, unknown>[]).push(entryData);
     }
   }
-  
+
   return result;
 }
 
@@ -266,12 +297,12 @@ export function parseStatusOutput(output: string): Array<{
   lockToken: string;
   path: string;
 }> {
-  const lines = output.trim().split('\n');
+  const lines = output.trim().split("\n");
   const results = [];
 
   for (const line of lines) {
     if (line.length < 8) continue;
-    
+
     // SVN status format: XXXXXXXXX path
     // Columns: status, props, locked, history, switched, lock token
     const status = line.charAt(0);
@@ -300,11 +331,11 @@ export function parseStatusOutput(output: string): Array<{
  * Parses SVN info output
  */
 export function parseInfoOutput(output: string): Record<string, string> {
-  const lines = output.trim().split('\n');
+  const lines = output.trim().split("\n");
   const info: Record<string, string> = {};
 
   for (const line of lines) {
-    const colonIndex = line.indexOf(':');
+    const colonIndex = line.indexOf(":");
     if (colonIndex > 0) {
       const key = line.substring(0, colonIndex).trim();
       const value = line.substring(colonIndex + 1).trim();
@@ -319,8 +350,8 @@ export function parseInfoOutput(output: string): Record<string, string> {
  * Validates that a path exists and is accessible
  */
 export function validatePath(path: string): void {
-  if (!path || typeof path !== 'string') {
-    throw new Error('Path must be a non-empty string');
+  if (!path || typeof path !== "string") {
+    throw new Error("Path must be a non-empty string");
   }
 }
 
@@ -328,14 +359,22 @@ export function validatePath(path: string): void {
  * Validates that a URL is valid
  */
 export function validateUrl(url: string): void {
-  if (!url || typeof url !== 'string') {
-    throw new Error('URL must be a non-empty string');
+  if (!url || typeof url !== "string") {
+    throw new Error("URL must be a non-empty string");
   }
-  
-  const validProtocols = ['http://', 'https://', 'svn://', 'svn+ssh://', 'file://'];
-  const hasValidProtocol = validProtocols.some(protocol => url.startsWith(protocol));
-  
+
+  const validProtocols = [
+    "http://",
+    "https://",
+    "svn://",
+    "svn+ssh://",
+    "file://",
+  ];
+  const hasValidProtocol = validProtocols.some((protocol) =>
+    url.startsWith(protocol),
+  );
+
   if (!hasValidProtocol) {
-    throw new Error(`URL must start with one of: ${validProtocols.join(', ')}`);
+    throw new Error(`URL must start with one of: ${validProtocols.join(", ")}`);
   }
 }
