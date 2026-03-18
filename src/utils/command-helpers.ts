@@ -258,6 +258,13 @@ const PATH_PARAM_NAMES = new Set([
   "projectpropertiespath",
 ]);
 
+const QUOTED_PARAM_NAMES = new Set([
+  "datemin",
+  "datemax",
+  "logmsg",
+  "findstring",
+]);
+
 function escapePathArg(path: string): string {
   let cleanPath = path.replace(/^"|"$/g, "");
   cleanPath = cleanPath.replace(/"/g, '\\"');
@@ -354,9 +361,15 @@ export async function executeTortoiseProc(
 
   for (const [key, value] of Object.entries(convertedParams)) {
     if (value) {
-      const escapedValue = PATH_PARAM_NAMES.has(key.toLowerCase())
-        ? escapePathArg(value)
-        : escapeArg(value);
+      const keyLower = key.toLowerCase();
+      let escapedValue: string;
+      if (PATH_PARAM_NAMES.has(keyLower)) {
+        escapedValue = escapePathArg(value);
+      } else if (QUOTED_PARAM_NAMES.has(keyLower)) {
+        escapedValue = escapePathArg(value);
+      } else {
+        escapedValue = escapeArg(value);
+      }
       args.push(`/${key}:${escapedValue}`);
     }
   }
