@@ -22,6 +22,13 @@ export const TortoiseLogOptionsSchema = z.object({
   closeOnEnd: z.enum(["0", "1", "2", "3", "4", "5", "6", "7"]).optional(),
 });
 
+function formatSVNDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `{${year}-${month}-${day}}`;
+}
+
 export async function handleTortoiseLog(args: unknown): Promise<unknown> {
   const options = TortoiseLogOptionsSchema.parse(args);
 
@@ -43,12 +50,11 @@ export async function handleTortoiseLog(args: unknown): Promise<unknown> {
   if (options.merge) {
     params.merge = "";
   }
-  if (options.dateMin) {
-    params.datemin = options.dateMin;
-  }
-  if (options.dateMax) {
-    params.datemax = options.dateMax;
-  }
+
+  // Default date range: 1970-01-01 to today
+  params.datemin = options.dateMin ?? formatSVNDate(new Date(1970, 0, 1));
+  params.datemax = options.dateMax ?? formatSVNDate(new Date());
+
   if (options.findString) {
     params.findstring = options.findString;
   }
