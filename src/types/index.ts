@@ -120,6 +120,7 @@ export type CleanupOptions = z.infer<typeof CleanupOptionsSchema>;
 
 // Status options
 export const StatusOptionsSchema = BaseSVNOptionsSchema.extend({
+  includeRaw: z.boolean().optional().describe('Include raw XML stdout in addition to structured entries; omitted by default'),
   paths: z.union([z.string(), z.array(z.string())]).optional(),
   revision: RevisionSchema.optional(),
   depth: SVNDepthSchema.optional(),
@@ -134,19 +135,21 @@ export type StatusOptions = z.infer<typeof StatusOptionsSchema>;
 
 // Log options
 export const LogOptionsSchema = BaseSVNOptionsSchema.extend({
+  includeRaw: z.boolean().optional().describe('Include raw XML stdout in addition to structured entries; omitted by default'),
   paths: z.union([z.string(), z.array(z.string())]).optional(),
   revisionRange: z
     .object({
       start: RevisionSchema,
       end: RevisionSchema,
     })
-    .optional(),
-  limit: z.number().optional(),
+    .optional()
+    .describe('Revision range to retrieve; both start and end are required'),
+  limit: z.number().int().positive().default(30).describe('Maximum log entries to retrieve; defaults to 30 to bound response size'),
   verbose: z.boolean().optional(),
   useMergeHistory: z.boolean().optional(),
   stopOnCopy: z.boolean().optional(),
   incremental: z.boolean().optional(),
-  xml: z.boolean().optional(),
+  xml: z.boolean().optional().describe('Include raw XML stdout; alias for includeRaw'),
 });
 
 export type LogOptions = z.infer<typeof LogOptionsSchema>;
@@ -191,6 +194,7 @@ export type BlameOptions = z.infer<typeof BlameOptionsSchema>;
 
 // Info options
 export const InfoOptionsSchema = BaseSVNOptionsSchema.extend({
+  includeRaw: z.boolean().optional().describe('Include raw XML stdout in addition to structured entries; omitted by default'),
   paths: z.union([z.string(), z.array(z.string())]).optional(),
   revision: RevisionSchema.optional(),
   depth: SVNDepthSchema.optional(),

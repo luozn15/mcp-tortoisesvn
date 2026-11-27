@@ -1,6 +1,7 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { LogOptionsSchema, type LogOptions } from '../../types/index.js';
 import { executeSVN, buildRevisionArg, toPathArray } from '../../utils/command-helpers.js';
+import { buildQueryResult, parseLogXml } from '../../utils/svn-xml.js';
 
 export const logTool: Tool = {
   name: 'svn_log',
@@ -8,6 +9,10 @@ export const logTool: Tool = {
   inputSchema: {
     type: 'object',
     properties: {
+      includeRaw: {
+        type: 'boolean',
+        description: 'Include raw XML stdout in addition to structured entries; omitted by default',
+      },
       paths: {
         oneOf: [
           { type: 'string' },
@@ -17,7 +22,8 @@ export const logTool: Tool = {
       },
       revisionRange: {
         type: 'object',
-        description: 'Revision range to show log for',
+        description: 'Revision range to show log for; both start and end are required',
+        required: ['start', 'end'],
         properties: {
           start: {
             type: 'object',
@@ -36,8 +42,10 @@ export const logTool: Tool = {
         },
       },
       limit: {
-        type: 'number',
-        description: 'Maximum number of log entries to show',
+        type: 'integer',
+        minimum: 1,
+        default: 30,
+        description: 'Maximum number of log entries to show; defaults to 30',
       },
       verbose: {
         type: 'boolean',
@@ -57,7 +65,7 @@ export const logTool: Tool = {
       },
       xml: {
         type: 'boolean',
-        description: 'Output in XML format',
+        description: 'Include raw XML stdout; alias for includeRaw',
       },
       username: { type: 'string' },
       password: { type: 'string' },
@@ -96,68 +104,14 @@ export async function handleLog(args: unknown): Promise<unknown> {
 
   if (options.paths) {
     const paths = toPathArray(options.paths);
-    svnArgs.push(...paths);
+    svnArgs.push('--', ...paths);
   }
 
   const result = await executeSVN('log', svnArgs, options);
 
-  return {
-    success: result.success,
-    stdout: result.stdout,
-    entries: parseLogXml(result.stdout),
-  };
-}
-
-function parseLogXml(xml: string): Array<{
-  revision: number;
-  author: string;
-  date: string;
-  message: string;
-  paths?: Array<{ action: string; path: string }>;
-}> {
-  const entries = [];
-  const entryRegex = /<logentry[^>]*revision="(\d+)"[^>]*>([\s\S]*?)<\/logentry>/g;
-  let match;
-
-  while ((match = entryRegex.exec(xml)) !== null) {
-    const revision = parseInt(match[1], 10);
-    const entryContent = match[2];
-
-    const authorMatch = /<author>([^<]*)<\/author>/g.exec(entryContent);
-    const dateMatch = /<date>([^<]*)<\/date>/g.exec(entryContent);
-    const msgMatch = /<msg>([\s\S]*?)<\/msg>/g.exec(entryContent);
-
-    const entry: {
-      revision: number;
-      author: string;
-      date: string;
-      message: string;
-      paths?: Array<{ action: string; path: string }>;
-    } = {
-      revision,
-      author: authorMatch ? authorMatch[1] : '',
-      date: dateMatch ? dateMatch[1] : '',
-      message: msgMatch ? msgMatch[1].trim() : '',
-    };
-
-    // Parse changed paths if present
-    const pathsMatch = /<paths>([\s\S]*?)<\/paths>/g.exec(entryContent);
-    if (pathsMatch) {
-      const pathsContent = pathsMatch[1];
-      const pathRegex = /<path[^>]*action="([^"]*)"[^>]*>([^<]*)<\/path>/g;
-      const paths = [];
-      let pathMatch;
-      while ((pathMatch = pathRegex.exec(pathsContent)) !== null) {
-        paths.push({
-          action: pathMatch[1],
-          path: pathMatch[2],
-        });
-      }
-      entry.paths = paths;
-    }
-
-    entries.push(entry);
-  }
-
-  return entries.reverse(); // Return oldest first
+  return buildQueryResult(
+    result,
+    parseLogXml(result.stdout),
+    options.includeRaw || options.xml,
+  );
 }

@@ -1,6 +1,7 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { StatusOptionsSchema, type StatusOptions } from '../../types/index.js';
 import { executeSVN, buildRevisionArg, toPathArray } from '../../utils/command-helpers.js';
+import { buildQueryResult, parseStatusResultXml } from '../../utils/svn-xml.js';
 
 export const statusTool: Tool = {
   name: 'svn_status',
@@ -8,6 +9,10 @@ export const statusTool: Tool = {
   inputSchema: {
     type: 'object',
     properties: {
+      includeRaw: {
+        type: 'boolean',
+        description: 'Include raw XML stdout in addition to structured entries; omitted by default',
+      },
       paths: {
         oneOf: [
           { type: 'string' },
@@ -86,44 +91,14 @@ export async function handleStatus(args: unknown): Promise<unknown> {
 
   if (options.paths) {
     const paths = toPathArray(options.paths);
-    svnArgs.push(...paths);
+    svnArgs.push('--', ...paths);
   }
 
   const result = await executeSVN('status', svnArgs, options);
 
+  const status = parseStatusResultXml(result.stdout);
   return {
-    success: result.success,
-    stdout: result.stdout,
-    entries: parseStatusXml(result.stdout),
+    ...buildQueryResult(result, status.entries, options.includeRaw),
+    ...(options.showUpdates ? { targets: status.targets } : {}),
   };
-}
-
-function parseStatusXml(xml: string): Array<{
-  path: string;
-  status: string;
-  props: string;
-  revision?: number;
-}> {
-  const entries = [];
-  const entryRegex = /<entry[^>]*path="([^"]*)"[^>]*>[\s\S]*?<\/entry>/g;
-  let match;
-
-  while ((match = entryRegex.exec(xml)) !== null) {
-    const path = match[1];
-    const entryContent = match[0];
-    
-    const wcStatusMatch = /<wc-status[^>]*item="([^"]*)"[^>]*props="([^"]*)"[^>]*>/g.exec(entryContent);
-    const revisionMatch = /<wc-status[^>]*revision="([^"]*)"[^>]*>/g.exec(entryContent);
-
-    if (wcStatusMatch) {
-      entries.push({
-        path,
-        status: wcStatusMatch[1],
-        props: wcStatusMatch[2],
-        revision: revisionMatch ? parseInt(revisionMatch[1], 10) : undefined,
-      });
-    }
-  }
-
-  return entries;
 }
