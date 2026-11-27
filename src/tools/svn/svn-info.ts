@@ -1,6 +1,7 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { InfoOptionsSchema, type InfoOptions } from '../../types/index.js';
 import { executeSVN, buildRevisionArg, toPathArray } from '../../utils/command-helpers.js';
+import { buildQueryResult, parseInfoXml } from '../../utils/svn-xml.js';
 
 export const infoTool: Tool = {
   name: 'svn_info',
@@ -8,6 +9,10 @@ export const infoTool: Tool = {
   inputSchema: {
     type: 'object',
     properties: {
+      includeRaw: {
+        type: 'boolean',
+        description: 'Include raw XML stdout in addition to structured entries; omitted by default',
+      },
       paths: {
         oneOf: [
           { type: 'string' },
@@ -58,88 +63,10 @@ export async function handleInfo(args: unknown): Promise<unknown> {
 
   if (options.paths) {
     const paths = toPathArray(options.paths);
-    svnArgs.push(...paths);
+    svnArgs.push('--', ...paths);
   }
 
   const result = await executeSVN('info', svnArgs, options);
 
-  return {
-    success: result.success,
-    stdout: result.stdout,
-    entries: parseInfoXml(result.stdout),
-  };
-}
-
-function parseInfoXml(xml: string): Array<{
-  path: string;
-  url: string;
-  repositoryRoot: string;
-  uuid: string;
-  revision: number;
-  nodeKind: string;
-  schedule?: string;
-  author?: string;
-  lastChangedRevision?: number;
-  lastChangedDate?: string;
-  lastChangedAuthor?: string;
-}> {
-  const entries = [];
-  const entryRegex = /<entry[^>]*kind="([^"]*)"[^>]*path="([^"]*)"[^>]*revision="(\d+)"[^>]*>([\s\S]*?)<\/entry>/g;
-  let match;
-
-  while ((match = entryRegex.exec(xml)) !== null) {
-    const nodeKind = match[1];
-    const path = match[2];
-    const revision = parseInt(match[3], 10);
-    const entryContent = match[4];
-
-    const urlMatch = /<url>([^<]*)<\/url>/g.exec(entryContent);
-    const rootMatch = /<root>([^<]*)<\/root>/g.exec(entryContent);
-    const uuidMatch = /<uuid>([^<]*)<\/uuid>/g.exec(entryContent);
-    const scheduleMatch = /<schedule>([^<]*)<\/schedule>/g.exec(entryContent);
-    const commitMatch = /<commit[^>]*revision="(\d+)"[^>]*>([\s\S]*?)<\/commit>/g.exec(entryContent);
-
-    const entry: {
-      path: string;
-      url: string;
-      repositoryRoot: string;
-      uuid: string;
-      revision: number;
-      nodeKind: string;
-      schedule?: string;
-      author?: string;
-      lastChangedRevision?: number;
-      lastChangedDate?: string;
-      lastChangedAuthor?: string;
-    } = {
-      path,
-      url: urlMatch ? urlMatch[1] : '',
-      repositoryRoot: rootMatch ? rootMatch[1] : '',
-      uuid: uuidMatch ? uuidMatch[1] : '',
-      revision,
-      nodeKind,
-    };
-
-    if (scheduleMatch) {
-      entry.schedule = scheduleMatch[1];
-    }
-
-    if (commitMatch) {
-      entry.lastChangedRevision = parseInt(commitMatch[1], 10);
-      const commitContent = commitMatch[2];
-      const authorMatch = /<author>([^<]*)<\/author>/g.exec(commitContent);
-      const dateMatch = /<date>([^<]*)<\/date>/g.exec(commitContent);
-      
-      if (authorMatch) {
-        entry.lastChangedAuthor = authorMatch[1];
-      }
-      if (dateMatch) {
-        entry.lastChangedDate = dateMatch[1];
-      }
-    }
-
-    entries.push(entry);
-  }
-
-  return entries;
+  return buildQueryResult(result, parseInfoXml(result.stdout), options.includeRaw);
 }

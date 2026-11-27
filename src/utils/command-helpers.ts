@@ -4,6 +4,8 @@ import { readFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { SVNError, TimeoutError } from "../errors/index.js";
 import { getLogger } from "./logger.js";
+import { decodeCommandOutput } from "./command-output.js";
+import { collectSensitiveValues, redactSensitiveData, redactText } from "./redaction.js";
 import type {
   CommandResult,
   BaseSVNOptions,
@@ -22,10 +24,13 @@ function getLogFilePath(): string {
 }
 
 function logCommand(tool: string, input: unknown, command: string): void {
+  const secrets = collectSensitiveValues(input);
+  const safeInput = redactSensitiveData(input, secrets);
+  const safeCommand = redactText(command, secrets);
   const timestamp = new Date().toISOString();
-  const logEntry = `[${timestamp}] ${tool}\n  Input: ${JSON.stringify(input, null, 2).replace(/\n/g, "\n  ")}\n  Command: ${command}\n\n`;
+  const logEntry = `[${timestamp}] ${tool}\n  Input: ${JSON.stringify(safeInput, null, 2).replace(/\n/g, "\n  ")}\n  Command: ${safeCommand}\n\n`;
 
-  getLogger().info(`[${tool}] Executing: ${command}`);
+  getLogger().info(`[${tool}] Executing: ${safeCommand}`);
 
   try {
     const logFile = getLogFilePath();
@@ -278,15 +283,17 @@ export async function executeCommand(
   command: string,
   args: string[],
   timeout: number = DEFAULT_TIMEOUT,
+  useShell = true,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const process = spawn(command, args, {
-      shell: true,
-      windowsVerbatimArguments: true,
+      shell: useShell,
+      windowsVerbatimArguments: useShell,
+      windowsHide: true,
     });
 
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     // Set timeout
@@ -298,16 +305,26 @@ export async function executeCommand(
     }
 
     process.stdout?.on("data", (data: Buffer) => {
-      stdout += data.toString();
+      stdoutChunks.push(data);
     });
 
     process.stderr?.on("data", (data: Buffer) => {
-      stderr += data.toString();
+      stderrChunks.push(data);
     });
 
     process.on("close", (code: number | null) => {
       if (timeoutId) {
         clearTimeout(timeoutId);
+      }
+
+      let stdout: string;
+      let stderr: string;
+      try {
+        stdout = decodeCommandOutput(Buffer.concat(stdoutChunks));
+        stderr = decodeCommandOutput(Buffer.concat(stderrChunks));
+      } catch (error) {
+        reject(new SVNError(`Failed to decode command output: ${String(error)}`, 1));
+        return;
       }
 
       if (code === 0) {
@@ -399,7 +416,8 @@ export async function executeSVN(
   const allArgs = [subcommand, ...buildCommonArgs(options), ...args];
   const fullCommand = `${svnCmd} ${allArgs.join(" ")}`;
   logCommand(`svn_${subcommand}`, { args, options }, fullCommand);
-  return executeCommand(svnCmd, allArgs, timeout);
+  // SVN arguments are raw values; let Node quote them without a command shell.
+  return executeCommand(svnCmd, allArgs, timeout, false);
 }
 
 /**

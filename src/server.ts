@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getLogger } from "./utils/logger.js";
 import { SVNError } from "./errors/index.js";
+import { collectSensitiveValues, redactSensitiveData } from "./utils/redaction.js";
 
 // Import all Zod schemas from types
 import {
@@ -125,6 +126,7 @@ function wrapHandler(
   handler: (args: unknown) => Promise<unknown>,
 ) {
   return async (args: Record<string, unknown>) => {
+    const secrets = collectSensitiveValues(args);
     logger.debug(`Executing tool: ${name}`, args);
 
     try {
@@ -142,7 +144,7 @@ function wrapHandler(
         ],
       };
     } catch (error) {
-      logger.error(`Tool execution failed: ${name}`, error);
+      logger.error(`Tool execution failed: ${name}`, redactSensitiveData(error, secrets));
 
       let errorMessage: string;
       if (error instanceof SVNError) {
@@ -157,10 +159,14 @@ function wrapHandler(
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({
+            text: JSON.stringify(redactSensitiveData({
               success: false,
               error: errorMessage,
-            }),
+              ...(error instanceof SVNError ? {
+                exitCode: error.code,
+                stderr: error.stderr,
+              } : {}),
+            }, secrets)),
           },
         ],
         isError: true,

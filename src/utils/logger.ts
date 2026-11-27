@@ -1,3 +1,5 @@
+import { collectSensitiveValues, redactSensitiveData, redactText } from './redaction.js';
+
 /**
  * Simple structured logger
  */
@@ -41,13 +43,41 @@ export class NoopLogger implements Logger {
   error(): void {}
 }
 
-let globalLogger: Logger = new ConsoleLogger();
+class RedactingLogger implements Logger {
+  constructor(private readonly delegate: Logger) {}
+
+  private write(level: keyof Logger, message: string, args: unknown[]): void {
+    const secrets = collectSensitiveValues(args);
+    this.delegate[level](
+      redactText(message, secrets),
+      ...args.map((argument) => redactSensitiveData(argument, secrets)),
+    );
+  }
+
+  debug(message: string, ...args: unknown[]): void {
+    this.write('debug', message, args);
+  }
+
+  info(message: string, ...args: unknown[]): void {
+    this.write('info', message, args);
+  }
+
+  warn(message: string, ...args: unknown[]): void {
+    this.write('warn', message, args);
+  }
+
+  error(message: string, ...args: unknown[]): void {
+    this.write('error', message, args);
+  }
+}
+
+let globalLogger: Logger = new RedactingLogger(new ConsoleLogger());
 
 /**
  * Sets the global logger
  */
 export function setLogger(logger: Logger): void {
-  globalLogger = logger;
+  globalLogger = logger instanceof RedactingLogger ? logger : new RedactingLogger(logger);
 }
 
 /**
